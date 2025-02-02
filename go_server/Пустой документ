@@ -1,0 +1,8 @@
+module github.com/GermannM3/telegram_bot_project
+
+go 1.20
+
+require (
+    github.com/some/package v1.2.3
+    // Добавьте другие зависимости здесь
+)

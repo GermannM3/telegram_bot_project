@@ -5,14 +5,17 @@ import (
     "fmt"
     "log"
     "net/http"
-    "io/ioutil"
     "os"
     "strings"
+    "bytes"
+    "io" // Добавлен импорт
+
+    "github.com/gin-gonic/gin"
 )
 
 type TelegramUpdate struct {
     UpdateID int `json:"update_id"`
-    Message struct {
+    Message  struct {
         Chat struct {
             ID int64 `json:"id"`
         } `json:"chat"`
@@ -27,75 +30,76 @@ type TelegramResponse struct {
     ParseMode string `json:"parse_mode,omitempty"`
 }
 
-func generateHandler(w http.ResponseWriter, r *http.Request) {
-    body, err := ioutil.ReadAll(r.Body)
+func generateHandler(c *gin.Context) {
+    body, err := io.ReadAll(c.Request.Body)
     if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
         return
     }
 
     var update TelegramUpdate
     err = json.Unmarshal(body, &update)
     if err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
         return
     }
 
     // Получаем токен из переменных среды
     token := os.Getenv("TELEGRAM_BOT_TOKEN")
     if token == "" {
-        http.Error(w, "TELEGRAM_BOT_TOKEN is not set", http.StatusInternalServerError)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "TELEGRAM_BOT_TOKEN is not set"})
         return
     }
 
     // Отправляем запрос к серверу на Python
     resp, err := http.Post("http://python_server:5000/generate", "application/json", 
-        ioutil.NopCloser(strings.NewReader(fmt.Sprintf(`{"text": "%s"}`, update.Message.Text))))
+        strings.NewReader(fmt.Sprintf(`{"text": "%s"}`, update.Message.Text)))
     if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to Python server"})
         return
     }
     defer resp.Body.Close()
 
     var res TelegramResponse
-    err = json.NewDecoder(resp.Body).Decode(&res)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+    if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse response from Python server"})
         return
     }
 
     // Отправляем ответ в Telegram
     response := TelegramResponse{
-        Method: "sendMessage",
-        ChatID: update.Message.Chat.ID,
-        Text:   res.Text,
+        Method:  "sendMessage",
+        ChatID:  update.Message.Chat.ID,
+        Text:    res.Text,
+        ParseMode: "HTML",
     }
 
-    url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
     jsonData, err := json.Marshal(response)
     if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to marshal response"})
         return
     }
 
-    respTelegram, err := http.Post(url, "application/json", ioutil.NopCloser(bytes.NewReader(jsonData)))
+    url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+    respTelegram, err := http.Post(url, "application/json", bytes.NewReader(jsonData))
     if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send message to Telegram"})
         return
     }
     defer respTelegram.Body.Close()
 
     if respTelegram.StatusCode != http.StatusOK {
-        body, _ := ioutil.ReadAll(respTelegram.Body)
-        http.Error(w, string(body), respTelegram.StatusCode)
+        body, _ := io.ReadAll(respTelegram.Body)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Telegram API error: %s", string(body))})
         return
     }
 
-    w.WriteHeader(http.StatusOK)
+    c.JSON(http.StatusOK, gin.H{"status": "Message sent successfully"})
 }
 
 func main() {
-    http.HandleFunc("/telegram", generateHandler)
+    router := gin.Default()
+    router.POST("/telegram", generateHandler)
     fmt.Println("Go server is running on port 8080")
-    log.Fatal(http.ListenAndServe(":8080", nil))
+    log.Fatal(router.Run(":8080"))
 }

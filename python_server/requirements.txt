@@ -2,4 +2,4 @@ flask
 transformers
 torch
 python-telegram-bot
-
+pandas
