@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  go_server:
+    build:
+      context: ./go_server
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    depends_on:
+      - python_server
+
+  python_server:
+    build:
+      context: ./python_server
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./fine_tuned_model:/app/fine_tuned_model
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///data/data.db
+
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: dbname
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
